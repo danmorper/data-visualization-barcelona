@@ -1,0 +1,253 @@
+---
+title: "Barcelona"
+author: "Lyla Dejoua, Chiara Menini, Lidia Torres, Daniel Moreno"
+date: "22/1/2022"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r include=FALSE}
+library(wesanderson)
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+library(GGally)
+library(pheatmap)
+library(mclust)
+library(corrplot)
+library(leaflet)
+library(lubridate)
+library(plotly)
+library(kableExtra)
+
+```
+
+## Motivation
+
+
+Barcelona is the second most populated municipality in Spain.
+It was therefore of high interest analyzing its population regarding the year 2015.
+
+The goal of this analysis is to have a better understanding of the level of education of the population in the city.
+More precisely, the aim is to study whether and how the different educational levels reached by the population influence the registered income.
+
+```{r include=FALSE}
+## Data Preparation
+income=fread("data/Revenu_2015.csv") %>% as.data.table()
+inhab=fread("data/inhab_by_area.csv") %>% as.data.table()
+
+#Academic table : data cleaning and wrangling
+academic=fread("data/Academic_lvl_2015.csv",encoding = "UTF-8") %>% as.data.table()
+academic=academic[,c("Any","Codi_Districte","Nom_Districte","Codi_Barri"):=NULL]
+academic <- filter(academic, Nivell_academic != "No consta")
+academic=aggregate(x = academic$Nombre,                
+          by = list(academic$Nom_Barri,academic$Nivell_academic),              
+          FUN = sum)   %>% as.data.table()
+setnames(academic,c("Group.1","Group.2","x"),
+         c("Neighborhood","Academic_level","Number"))
+
+
+#Income table:
+income=fread("data/Revenu_2015.csv",encoding = "UTF-8") %>% as.data.table()
+income=income[,c("Any","Seccio_Censal"):=NULL]
+income=aggregate(x = income$Import_Euros,                
+          by = list(income$Nom_Barri),              
+          FUN = median)   %>% as.data.table()
+
+setnames(income, c("Group.1","x"), c("Neighborhood","Income"))
+
+#Inhabitants number table:
+inhab=aggregate(x = academic$Number,                
+          by = list(academic$Neighborhood),              
+          FUN = sum)   %>% as.data.table()
+
+
+setnames(inhab, c("Group.1","x"), c("Neighborhood","Inhabitants"))
+
+#Merging academic level table with income table
+table=merge(academic, income, by = "Neighborhood", all = FALSE)
+table=merge(table,inhab,by="Neighborhood",all=FALSE)
+
+table$Academic_level <- factor(table$Academic_level, levels = c(
+          "Sense estudis",
+          "Estudis primaris / certificat d'escolaritat / EGB",
+          "Batxillerat elemental / graduat escolar / ESO / FPI",
+          "Batxillerat superior / BUP / COU / FPII / CFGM grau mitjà",
+          "Estudis universitaris / CFGS grau superior" 
+))
+
+##Data table with only the people with university diploma
+high_degree=table[Academic_level=="Estudis universitaris / CFGS grau superior"]
+high_degree=high_degree[,proportion:=high_degree$Number/high_degree$Inhabitants]
+high_degree=high_degree[,"Academic_level":=NULL]
+```
+
+### Observe the first and last rows and str of the datasets
+```{r echo=FALSE}
+
+knitr::kable(head(table),align = "lccrr")
+#str(academic)
+#str(income)
+```
+
+
+
+
+
+
+
+## Data Analysis
+
+```{r include=FALSE}
+#Assign a color for each education level
+
+cols <- c(
+          "Sense estudis"= "cornsilk",
+          "Estudis primaris / certificat d'escolaritat / EGB"= "yellow",
+         "Batxillerat elemental / graduat escolar / ESO / FPI"= "orange",
+         "Batxillerat superior / BUP / COU / FPII / CFGM grau mitjà" = "red",
+          "Estudis universitaris / CFGS grau superior"="sienna"  
+          )
+
+```
+
+
+In this section we explore our datasets. 
+The first descriptive plot shows the relationship between a certain value of income and the number of people earning that income divided by their educational level.
+
+```{r first plot, echo=FALSE, message=FALSE, warning=FALSE, fig.width = 10}
+p <- table %>%
+  ggplot( aes(Income, Number)) +
+  stat_smooth(aes(color=Academic_level),se=FALSE) +
+  scale_color_manual(values = cols,
+                     aesthetics = c("color"))
+
+p
+```
+
+
+
+Few observations can be made:
+
+1. As expected, the higher income is mainly earned by a greater number of people with the highest educational level.
+
+2. We can see a crucial point around an income value a bit higher than 32225. That is a pivotal point, where we can see a switch in the preponderant class of people earning the considered income.
+
+3. Lastly we can see how the peaks of the different curves shift towards higher incomes the more we consider higher levels of education. This indicates that, by increasing the educational level, also the income that the majority of the people earn increases.
+
+
+
+
+### To further analyze…
+To further analyze our findings, by focusing only on the higher and lower educational level, we plot a boxplot to see the big difference around the previously mentioned pivotal point (around income=32225). We chose the value 32225 as it is the median income in Barcelona (all neighborhoods taken into account).
+
+```{r echo=FALSE}
+median=median(table$Income)
+print(median)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+ggplot(table[Academic_level=="Estudis primaris / certificat d'escolaritat / EGB"|Academic_level=="Estudis universitaris / CFGS grau superior"] ,aes(Income>"32225",Number,color=Academic_level))+geom_boxplot()+xlab("Income > 32225 ")+ylab("Number of people with university degree")
+```
+
+This boxplot shows us that for households with an income lower than 32225 euros a year, they have a lower median of people with low education level than university educated people. For those with an income higher than 32225, it's the opposite, they have more university educated people. 
+
+
+## Statistically supported claim and visualize it
+
+We have already seen some evidence about the positive correlation between income and the level of studies. However, how sure can we be that the greater the median income in a district the more people with university degree. A good approach for trying to quantify this concept of how sure is a test hypothesis. 
+We are using a well-known test called Spearman’s correlation test. Our null hypothesis is that the Spearman’s correlation coefficient is greater than 0, which is true if and only if the correlation between both variables is greater than 0. 
+
+
+Our null hypothesis would be rejected if and only if the confidence interval corresponding to our estimation of the Spearman’s correlation coefficient, which is of the form (-infinity,b),  b real number, does not intersect with (0,+infinity). As we see in the graph, the intersersect is not empty, therefore we can not reject the null hypothesis. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(ggplot2)
+spearman=cor.test(high_degree$Income,high_degree$Number,method="spearman", alternative = "greater")
+estimate=spearman$estimate
+
+boot <- lapply(1:1000, function(i){sample(1:nrow(high_degree), nrow(high_degree), replace = TRUE)})
+real_boot=data.frame(Nombre=c(),Income=c(), sample_number=c())
+for (which_sample in 1:1000) {
+  sample_fixed=boot[[which_sample]]
+  real_boot=rbind(real_boot,cbind(high_degree[sample_fixed,],sample_number=rep(which_sample,length(sample_fixed))))
+}
+real_boot <- setDT(real_boot)
+boot_spearman=by(real_boot,real_boot$sample_number,function(df){cor.test(as.numeric(unlist(df[,2])),as.numeric(unlist(df[,3])),method="spearman")})
+
+proper_type=rep(0,length(boot_spearman))
+for (loop in 1:length(boot_spearman)) {
+  aux = boot_spearman[[loop]]
+#  print(aux)
+  proper_type[loop]=aux$estimate
+#  print(boot_spearman$`loop`$estimate)
+#  print(loop)
+}
+
+conf_int = quantile(proper_type, 0.95)
+
+proper_type=data.frame(proper_type)
+names(proper_type) <- c("x")
+ggplot(proper_type, aes(x)) + geom_histogram() +
+geom_vline(aes(xintercept=estimate, color="observed"))  + 
+  geom_vline(aes(xintercept=conf_int[1], color="CI"), linetype="dashed") +
+  geom_vline(aes(xintercept=conf_int[2], color="CI"), linetype="dashed") +
+  scale_color_manual(name = "Legend", values = c( observed = "blue", CI = "red"))
+
+
+```
+
+
+## Introduction of a third variable
+According to those results, the average income highly depends on the number of people with a university diploma. Logically, the 10 neighborhoods with the highest income would correspond to the 10 neighborhoods with the highest number of people with a university degree. To check it, we compute these two top 10, and we verify that we find most of the same neighborhoods in both of them. 
+
+Neighborhoods that have the higher income and also have the highest proportion of university-educated people :
+```{r echo=FALSE}
+print(intersect(top_n(high_degree,10,Income),top_n(high_degree,10,Number)))
+```
+
+We observe that only 4 out of 10 variables are in both top 10. Consequently, we can make the hypothesis that there is another parameter intervening. 
+As our Income data are average within neighborhoods while the number is just a plain number, not taking into account the main difference between neighborhoods, the population. It seems obvious that a neighborhood with 1000 people won't have the same amount of people with a university degree that a neighborhood with 10 people. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(high_degree, aes(Inhabitants, Number)) + geom_point()+stat_smooth()+facet_grid("Income >32225"~Income>32225)+xlab("Number of inhabitants")+ylab("Number of university degree")
+```
+
+We indeed can see that the relation between the number inhabitants and the number of people with a university degree is almost linear. We need to take the population into account. 
+
+To address the issue, we remove this "population" parameter and replace it with a less arbitrary parameter: the proportion of people with a university degree and compute once again the Spearman correlation. 
+
+```{r echo=TRUE}
+cor.test(high_degree$Income,high_degree$proportion,method="spearman",alternative = "greater")
+
+```
+The correlation coefficient is now very high, getting close to 1 with a still very low p-value. 
+We can then check again the top 10 to see if we get better results with the proportion instead of the Inhabitants. 
+
+Neighborhoods that have the higher income and also have the highest proportion of university-educated people:
+```{r echo=FALSE}
+
+print(intersect(top_n(high_degree,10,Income),top_n(high_degree,10,proportion)))
+```
+We now notice that all (10 out of 10 ) of the neighborhoods with the highest proportion of people with a university degree are also the ones with the highest income.
+
+## Conclusion 
+
+With the performed analysis we conclude that the higher the level of education, the higher the average income. We have been able to verify it in the example, where the richest neighborhoods are those that have people with the highest academic degrees. 
+
+In the first part of the work, “your data exploration including at least one descriptive plot with meaningful descriptions”, we have studied the correlation that exists between a certain value of income and the number of people earning that income divided by their educational level.
+It is here where we can verify that the higher the educational level, the more people earn this income.
+
+Then, in “your data analysis including at least one hypotheses/claim supported by a demonstrative plot and at least one statistically supported claim and its visualization and an example where controlling for confounding factors was necessary to support a claim or invalidate the hypothesis or implement one prediction task and show its performance”,  we have created the null hypothesis to corroborate what we said before, implying that it is also true.
+
+Finally, we have made an example with real data, taken from the 10 richest neighborhoods and coincides with those with the highest educational level. Therefore, it is fully proven.
+
+
+
